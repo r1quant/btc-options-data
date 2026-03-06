@@ -12,6 +12,7 @@
 
 ## BTCUSD_GEX_FEATURES.csv
 
+Os [cálculos](https://www.youtube.com/watch?v=kAfw2Mztf8o) foram desenvolvidos pelo [Leandro Guerra](https://github.com/leandrowar)
 
 Dataset combinando dados OHLC horários do BTC/USD com features extraídas da cadeia de opções (GEX, PCR, IV skew, etc.).
 
