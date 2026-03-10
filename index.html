@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BTC GEX Features Chart</title>
+  <script src="https://unpkg.com/lightweight-charts@5.1.0/dist/lightweight-charts.standalone.production.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css" />
+  <style>
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+    }
+  </style>
+</head>
+
+<body class="bg-base-300">
+
+  <!-- HEADER -->
+  <div class="h-[80px] flex items-center px-6 bg-base-200 border-b border-base-content/10">
+    <div class="flex items-center gap-4">
+      <h1 class="text-2xl font-bold tracking-tight">BTC</h1>
+      <div class="badge badge-lg badge-outline font-mono" id="date-range">Loading...</div>
+    </div>
+  </div>
+
+  <!-- BODY: SIDEBAR + CONTENT -->
+  <div class="flex" style="height: calc(100vh - 80px);">
+
+    <!-- SIDEBAR -->
+    <div class="w-[300px] bg-base-200 border-r border-base-content/10 overflow-y-auto p-4">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-base-content/60 mb-3">GEX Overlays (exp0)</h2>
+      <div class="flex gap-2 mb-4">
+        <button class="btn btn-xs btn-outline" onclick="toggleAll(true)">All</button>
+        <button class="btn btn-xs btn-outline" onclick="toggleAll(false)">None</button>
+      </div>
+      <div class="divider my-1"></div>
+      <label class="flex items-center gap-2 cursor-pointer mb-3">
+        <input type="checkbox" class="toggle toggle-xs toggle-primary" id="snapshot-toggle" />
+        <span class="text-xs font-semibold">8AM Snapshot</span>
+      </label>
+      <div class="divider my-1"></div>
+      <div id="sidebar-list" class="flex flex-col gap-1"></div>
+    </div>
+
+    <!-- CHART -->
+    <div id="chart-container" style="width: calc(100vw - 300px); height: calc(100vh - 80px);"></div>
+  </div>
+
+  <script>
+    const COLUMNS = [
+      "key_levels_gamma_flip",
+      "key_levels_call_wall",
+      "key_levels_put_wall",
+      "gex_top1_resistance_level",
+      "gex_top2_resistance_level",
+      "gex_top1_support_level",
+      "gex_top2_support_level",
+      "gex_total_resistance",
+      "pin_top1_level",
+      "pin_top2_level",
+      "oi_call_top1_strike",
+      "oi_call_top2_strike",
+      "oi_put_top1_strike",
+      "oi_put_top2_strike",
+    ];
+
+    const COLORS = [
+      "#f59e0b", "#06b6d4", "#ef4444", "#22c55e", "#a855f7",
+      "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16",
+      "#e879f9", "#38bdf8", "#fb923c", "#4ade80",
+    ];
+
+    const COL_KEYS = COLUMNS.map(c => `exp0_${c}`);
+
+    // Parse CSV
+    async function loadCSV() {
+      const resp = await fetch('https://raw.githubusercontent.com/r1quant/btc-options-data/refs/heads/main/btcusd_gex_features.csv');
+      const text = await resp.text();
+      const lines = text.trim().split('\n');
+      const headers = lines[0].split(',');
+      const rows = [];
+      for (let i = 1; i < lines.length; i++) {
+        const vals = lines[i].split(',');
+        const row = {};
+        for (let j = 0; j < headers.length; j++) {
+          row[headers[j]] = vals[j];
+        }
+        rows.push(row);
+      }
+      return rows;
+    }
+
+    function dateToTimestamp(dateStr) {
+      // "2026-01-23 01:00:00" -> unix timestamp
+      return Math.floor(new Date(dateStr + 'Z').getTime() / 1000);
+    }
+
+    async function main() {
+      const rows = await loadCSV();
+
+      // Date range
+      const firstDate = rows[0].date;
+      const lastDate = rows[rows.length - 1].date;
+      document.getElementById('date-range').textContent = `${firstDate.slice(0, 10)} → ${lastDate.slice(0, 10)}`;
+
+      // Create chart
+      const container = document.getElementById('chart-container');
+      const chart = LightweightCharts.createChart(container, {
+        layout: {
+          background: { type: 'solid', color: '#1d232a' },
+          textColor: '#a6adba',
+        },
+        grid: {
+          vertLines: { color: '#2a323c' },
+          horzLines: { color: '#2a323c' },
+        },
+        timeScale: {
+          timeVisible: true,
+          secondsVisible: false,
+        },
+        crosshair: {
+          mode: LightweightCharts.CrosshairMode.Normal,
+        },
+      });
+
+      // Candlestick
+      const candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+        upColor: '#22c55e',
+        downColor: '#ef4444',
+        borderUpColor: '#22c55e',
+        borderDownColor: '#ef4444',
+        wickUpColor: '#22c55e',
+        wickDownColor: '#ef4444',
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
+
+      const candleData = rows.map(r => ({
+        time: dateToTimestamp(r.date),
+        open: parseFloat(r.open),
+        high: parseFloat(r.high),
+        low: parseFloat(r.low),
+        close: parseFloat(r.close),
+      }));
+      candleSeries.setData(candleData);
+
+      // Pre-build 8AM snapshot lookup: for each colKey, map date -> 8am value
+      // For each row, extract hour. If hour == 8, that's the reference.
+      // For rows before the first 8am of a day, carry forward from previous day's 8am.
+      function buildSnapshotData(rows, colKey) {
+        // First pass: collect 8am values keyed by date (YYYY-MM-DD)
+        const eightAmValues = {};
+        for (const r of rows) {
+          const hour = parseInt(r.date.slice(11, 13), 10);
+          if (hour === 8) {
+            const val = parseFloat(r[colKey]);
+            if (!isNaN(val) && val !== 0) {
+              const day = r.date.slice(0, 10);
+              eightAmValues[day] = val;
+            }
+          }
+        }
+
+        // Second pass: for each row, find the applicable 8am value
+        const data = [];
+        let currentVal = null;
+        for (const r of rows) {
+          const day = r.date.slice(0, 10);
+          const hour = parseInt(r.date.slice(11, 13), 10);
+
+          // Update reference at 8am
+          if (hour >= 8 && eightAmValues[day] !== undefined) {
+            currentVal = eightAmValues[day];
+          }
+
+          if (currentVal !== null) {
+            data.push({ time: dateToTimestamp(r.date), value: currentVal });
+          }
+        }
+        return data;
+      }
+
+      // Line series for each column
+      const seriesMap = {};
+      const dataStore = {}; // { colKey: { full: [...], snapshot: [...] } }
+      const sidebarList = document.getElementById('sidebar-list');
+      let snapshotMode = false;
+
+      COL_KEYS.forEach((colKey, idx) => {
+        const color = COLORS[idx % COLORS.length];
+        const displayName = COLUMNS[idx].replace(/_/g, ' ');
+
+        // Build full data, skipping NaN/empty
+        const fullData = [];
+        for (const r of rows) {
+          const val = parseFloat(r[colKey]);
+          if (!isNaN(val) && val !== 0) {
+            fullData.push({ time: dateToTimestamp(r.date), value: val });
+          }
+        }
+
+        const snapshotData = buildSnapshotData(rows, colKey);
+        dataStore[colKey] = { full: fullData, snapshot: snapshotData };
+
+        const series = chart.addSeries(LightweightCharts.LineSeries, {
+          color: color,
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          visible: false,
+        });
+        series.setData(fullData);
+        seriesMap[colKey] = series;
+
+        // Sidebar checkbox
+        const label = document.createElement('label');
+        label.className = 'flex items-center gap-2 cursor-pointer hover:bg-base-300 rounded-lg px-2 py-1.5 transition-colors';
+        label.innerHTML = `
+      <input type="checkbox" class="checkbox checkbox-xs" data-col="${colKey}" />
+      <span class="w-3 h-3 rounded-full shrink-0" style="background:${color}"></span>
+      <span class="text-xs leading-tight">${displayName}</span>
+    `;
+        const cb = label.querySelector('input');
+        cb.addEventListener('change', () => {
+          series.applyOptions({ visible: cb.checked });
+        });
+        sidebarList.appendChild(label);
+      });
+
+      // 8AM Snapshot toggle
+      document.getElementById('snapshot-toggle').addEventListener('change', (e) => {
+        snapshotMode = e.target.checked;
+        for (const colKey of COL_KEYS) {
+          const d = snapshotMode ? dataStore[colKey].snapshot : dataStore[colKey].full;
+          seriesMap[colKey].setData(d);
+        }
+      });
+
+      // Toggle all
+      window.toggleAll = function (state) {
+        document.querySelectorAll('#sidebar-list input[type=checkbox]').forEach(cb => {
+          cb.checked = state;
+          const col = cb.dataset.col;
+          seriesMap[col].applyOptions({ visible: state });
+        });
+      };
+
+      chart.timeScale().fitContent();
+
+      // Resize
+      const ro = new ResizeObserver(() => {
+        chart.applyOptions({
+          width: container.clientWidth,
+          height: container.clientHeight,
+        });
+      });
+      ro.observe(container);
+    }
+
+    main();
+  </script>
+</body>
+
+</html>
