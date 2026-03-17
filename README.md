@@ -1,12 +1,12 @@
 
 ```python
 --- Report ---
-  Snapshots: 887
-  Total rows: 913742
-  Date: 2026-01-23 01:00:00 - 2026-03-09 19:00:00
+  Snapshots: 1030
+  Total rows: 1086658
+  Date: 2026-01-23 01:00:00 - 2026-03-17 10:00:00
   Columns: ['date', 'instrument_name', 'expiry_name', 'expiry_date', 'strike', 'type', 'volume', 'open_interest', 'rho', 'theta', 'vega', 'gamma', 'delta', 'bid_iv', 'ask_iv', 'mark_iv']
-  CSV: full_data.csv (129.5 MB)
-  PARQUET: full_data.parquet (19.3 MB)
+  CSV: full_data.csv (154.1 MB)
+  PARQUET: full_data.parquet (22.8 MB)
   Samples: full_data_sample.csv, sample.csv
 ```
 
