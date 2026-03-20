@@ -35,7 +35,7 @@
   <div class="flex" style="height: calc(100vh - 80px);">
 
     <!-- SIDEBAR -->
-    <div class="w-[300px] bg-base-200 border-r border-base-content/10 overflow-y-auto p-4">
+    <div class="w-[240px] bg-base-200 border-r border-base-content/10 overflow-y-auto p-4">
       <h2 class="text-sm font-semibold uppercase tracking-wider text-base-content/60 mb-3">GEX Overlays (exp0)</h2>
       <div class="flex gap-2 mb-4">
         <button class="btn btn-xs btn-outline" onclick="toggleAll(true)">All</button>
@@ -48,10 +48,18 @@
       </label>
       <div class="divider my-1"></div>
       <div id="sidebar-list" class="flex flex-col gap-1"></div>
+
+      <div class="divider my-1"></div>
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-base-content/60 mb-3">Regimes (exp0)</h2>
+      <div id="sidebar-regimes" class="flex flex-col gap-1"></div>
+
+      <div class="divider my-1"></div>
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-base-content/60 mb-3">Oscillators (exp0)</h2>
+      <div id="sidebar-oscillators" class="flex flex-col gap-1"></div>
     </div>
 
     <!-- CHART -->
-    <div id="chart-container" style="width: calc(100vw - 300px); height: calc(100vh - 80px);"></div>
+    <div id="chart-container" style="width: calc(100vw - 240px); height: calc(100vh - 80px);"></div>
   </div>
 
   <script>
@@ -63,6 +71,7 @@
       "gex_top2_resistance_level",
       "gex_top1_support_level",
       "gex_top2_support_level",
+      "gex_total_resistance",
       "pin_top1_level",
       "pin_top2_level",
       "oi_call_top1_strike",
@@ -70,6 +79,60 @@
       "oi_put_top1_strike",
       "oi_put_top2_strike",
     ];
+
+    // Regime columns: string -> numeric value + color mapping
+    const REGIME_COLUMNS = {
+      exp0_regime_dealer_gamma: {
+        displayName: 'Dealer Gamma',
+        mapping: {
+          long_gamma: { value: 1, color: '#22c55e' },
+          short_gamma: { value: -1, color: '#ef4444' },
+          unknown: { value: 0, color: '#6b7280' },
+        },
+      },
+      exp0_regime_volatility: {
+        displayName: 'Volatility Regime',
+        mapping: {
+          HIGH: { value: 2, color: '#ef4444' },
+          LOW: { value: -1, color: '#3b82f6' },
+          NORMAL: { value: 1, color: '#22c55e' },
+          UNKNOWN: { value: 0, color: '#6b7280' },
+        },
+      },
+      exp0_key_levels_pcr_regime: {
+        displayName: 'PCR Regime',
+        mapping: {
+          Bullish: { value: 1, color: '#22c55e' },
+          Bearish: { value: -1, color: '#ef4444' },
+          Neutral: { value: 0, color: '#f59e0b' },
+        },
+      },
+      exp0_gex_regime_x_pcr: {
+        displayName: 'GEX x PCR',
+        mapping: {
+          NORMAL_Bullish: { value: 3, color: '#22c55e' },
+          NORMAL_Neutral: { value: 2, color: '#86efac' },
+          NORMAL_Bearish: { value: 1, color: '#fbbf24' },
+          HIGH_Bullish: { value: 4, color: '#15803d' },
+          HIGH_Neutral: { value: 3, color: '#166534' },
+          HIGH_Bearish: { value: 2, color: '#f97316' },
+          LOW_Bullish: { value: -1, color: '#38bdf8' },
+          LOW_Neutral: { value: -2, color: '#6366f1' },
+          LOW_Bearish: { value: -3, color: '#ef4444' },
+          UNKNOWN_Bullish: { value: 0, color: '#9ca3af' },
+          UNKNOWN_Neutral: { value: 0, color: '#6b7280' },
+          UNKNOWN_Bearish: { value: -1, color: '#4b5563' },
+        },
+      },
+    };
+
+    // Oscillator columns (percentage values, shared pane)
+    const OSCILLATOR_COLUMNS = {
+      exp0_key_levels_gamma_flip_pct_distance: { displayName: 'Gamma Flip % Dist', color: '#f59e0b' },
+      exp0_spot_vs_call_wall_pct: { displayName: 'Spot vs Call Wall %', color: '#06b6d4' },
+      exp0_spot_vs_put_wall_pct: { displayName: 'Spot vs Put Wall %', color: '#ef4444' },
+      exp0_spot_vs_gamma_flip_pct: { displayName: 'Spot vs Gamma Flip %', color: '#a855f7' },
+    };
 
     const COLORS = [
       "#f59e0b", "#06b6d4", "#ef4444", "#22c55e", "#a855f7",
@@ -235,16 +298,200 @@
         sidebarList.appendChild(label);
       });
 
-      // 8AM Snapshot toggle
+      // ── REGIME PANES (lazy: created on toggle, removed on untoggle) ──
+      const regimeSeriesMap = {};   // colKey -> series (only when pane is active)
+      const regimeDataStore = {};   // colKey -> { full, snapshot }
+      const regimePanes = {};       // colKey -> pane (only when active)
+      const sidebarRegimes = document.getElementById('sidebar-regimes');
+
+      // Pre-compute regime data
+      function buildRegimeSnapshotData(rows, colKey, config) {
+        const eightAmValues = {};
+        for (const r of rows) {
+          const hour = parseInt(r.date.slice(11, 13), 10);
+          if (hour === 8) {
+            const rawVal = r[colKey];
+            const m = config.mapping[rawVal];
+            if (m) {
+              eightAmValues[r.date.slice(0, 10)] = { value: m.value, color: m.color, label: rawVal };
+            }
+          }
+        }
+        const data = [];
+        let current = null;
+        for (const r of rows) {
+          const day = r.date.slice(0, 10);
+          const hour = parseInt(r.date.slice(11, 13), 10);
+          if (hour >= 8 && eightAmValues[day]) current = eightAmValues[day];
+          if (current) data.push({ time: dateToTimestamp(r.date), value: current.value, color: current.color });
+        }
+        return data;
+      }
+
+      for (const [colKey, config] of Object.entries(REGIME_COLUMNS)) {
+        const fullData = [];
+        for (const r of rows) {
+          const rawVal = r[colKey];
+          const m = config.mapping[rawVal];
+          if (m) {
+            fullData.push({ time: dateToTimestamp(r.date), value: m.value, color: m.color });
+          }
+        }
+        const snapshotData = buildRegimeSnapshotData(rows, colKey, config);
+        regimeDataStore[colKey] = { full: fullData, snapshot: snapshotData };
+
+        // Sidebar toggle
+        const label = document.createElement('label');
+        label.className = 'flex items-center gap-2 cursor-pointer hover:bg-base-300 rounded-lg px-2 py-1.5 transition-colors';
+        label.innerHTML = `
+          <input type="checkbox" class="checkbox checkbox-xs" data-regime-col="${colKey}" />
+          <span class="text-xs leading-tight">${config.displayName}</span>
+        `;
+        const cb = label.querySelector('input');
+        cb.addEventListener('change', () => {
+          if (cb.checked) {
+            const pane = chart.addPane();
+            pane.setStretchFactor(0.5);
+            regimePanes[colKey] = pane;
+            const series = pane.addSeries(LightweightCharts.HistogramSeries, {
+              priceLineVisible: false,
+              lastValueVisible: false,
+              priceFormat: { type: 'price', precision: 0, minMove: 1 },
+            });
+            const d = snapshotMode ? regimeDataStore[colKey].snapshot : regimeDataStore[colKey].full;
+            series.setData(d);
+            regimeSeriesMap[colKey] = series;
+          } else {
+            if (regimePanes[colKey]) {
+              chart.removePane(regimePanes[colKey].paneIndex());
+              delete regimePanes[colKey];
+              delete regimeSeriesMap[colKey];
+            }
+          }
+        });
+        sidebarRegimes.appendChild(label);
+      }
+
+      // ── OSCILLATOR PANE (lazy: created when first osc toggled, removed when last untoggled) ──
+      let oscPane = null;
+      let zeroSeries = null;
+      const oscSeriesMap = {};   // colKey -> series (only when active)
+      const oscDataStore = {};
+      const oscActive = {};      // colKey -> true/false
+      const sidebarOscillators = document.getElementById('sidebar-oscillators');
+
+      function createOscPane() {
+        oscPane = chart.addPane();
+        oscPane.setStretchFactor(1);
+        zeroSeries = oscPane.addSeries(LightweightCharts.LineSeries, {
+          color: '#6b7280',
+          lineWidth: 1,
+          lineStyle: LightweightCharts.LineStyle.Dashed,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        zeroSeries.setData([
+          { time: dateToTimestamp(rows[0].date), value: 0 },
+          { time: dateToTimestamp(rows[rows.length - 1].date), value: 0 },
+        ]);
+      }
+
+      function destroyOscPane() {
+        if (oscPane) {
+          chart.removePane(oscPane.paneIndex());
+          oscPane = null;
+          zeroSeries = null;
+          for (const k of Object.keys(oscSeriesMap)) delete oscSeriesMap[k];
+        }
+      }
+
+      function getActiveOscCount() {
+        return Object.values(oscActive).filter(Boolean).length;
+      }
+
+      // Pre-compute oscillator data
+      for (const [colKey, config] of Object.entries(OSCILLATOR_COLUMNS)) {
+        const fullData = [];
+        for (const r of rows) {
+          const val = parseFloat(r[colKey]);
+          if (!isNaN(val)) {
+            fullData.push({ time: dateToTimestamp(r.date), value: val });
+          }
+        }
+        const snapshotData = buildSnapshotData(rows, colKey);
+        oscDataStore[colKey] = { full: fullData, snapshot: snapshotData };
+        oscActive[colKey] = false;
+
+        // Sidebar toggle
+        const label = document.createElement('label');
+        label.className = 'flex items-center gap-2 cursor-pointer hover:bg-base-300 rounded-lg px-2 py-1.5 transition-colors';
+        label.innerHTML = `
+          <input type="checkbox" class="checkbox checkbox-xs" data-osc-col="${colKey}" />
+          <span class="w-3 h-3 rounded-full shrink-0" style="background:${config.color}"></span>
+          <span class="text-xs leading-tight">${config.displayName}</span>
+        `;
+        const cb = label.querySelector('input');
+        cb.addEventListener('change', () => {
+          if (cb.checked) {
+            oscActive[colKey] = true;
+            if (!oscPane) createOscPane();
+            const series = oscPane.addSeries(LightweightCharts.LineSeries, {
+              color: config.color,
+              lineWidth: 1,
+              priceLineVisible: false,
+              lastValueVisible: false,
+              crosshairMarkerVisible: false,
+            });
+            const d = snapshotMode ? oscDataStore[colKey].snapshot : oscDataStore[colKey].full;
+            series.setData(d);
+            oscSeriesMap[colKey] = series;
+          } else {
+            oscActive[colKey] = false;
+            if (getActiveOscCount() === 0) {
+              destroyOscPane();
+            } else {
+              // Rebuild pane with remaining active series
+              destroyOscPane();
+              createOscPane();
+              for (const [k, cfg] of Object.entries(OSCILLATOR_COLUMNS)) {
+                if (!oscActive[k]) continue;
+                const s = oscPane.addSeries(LightweightCharts.LineSeries, {
+                  color: cfg.color,
+                  lineWidth: 1,
+                  priceLineVisible: false,
+                  lastValueVisible: false,
+                  crosshairMarkerVisible: false,
+                });
+                const d = snapshotMode ? oscDataStore[k].snapshot : oscDataStore[k].full;
+                s.setData(d);
+                oscSeriesMap[k] = s;
+              }
+            }
+          }
+        });
+        sidebarOscillators.appendChild(label);
+      }
+
+      // ── 8AM SNAPSHOT TOGGLE (all series) ──
       document.getElementById('snapshot-toggle').addEventListener('change', (e) => {
         snapshotMode = e.target.checked;
         for (const colKey of COL_KEYS) {
           const d = snapshotMode ? dataStore[colKey].snapshot : dataStore[colKey].full;
           seriesMap[colKey].setData(d);
         }
+        // Only update active regime/oscillator series
+        for (const colKey of Object.keys(regimeSeriesMap)) {
+          const d = snapshotMode ? regimeDataStore[colKey].snapshot : regimeDataStore[colKey].full;
+          regimeSeriesMap[colKey].setData(d);
+        }
+        for (const colKey of Object.keys(oscSeriesMap)) {
+          const d = snapshotMode ? oscDataStore[colKey].snapshot : oscDataStore[colKey].full;
+          oscSeriesMap[colKey].setData(d);
+        }
       });
 
-      // Toggle all
+      // ── TOGGLE ALL (GEX overlays only) ──
       window.toggleAll = function (state) {
         document.querySelectorAll('#sidebar-list input[type=checkbox]').forEach(cb => {
           cb.checked = state;
@@ -252,6 +499,77 @@
           seriesMap[col].applyOptions({ visible: state });
         });
       };
+
+      // ── CROSSHAIR TOOLTIP FOR REGIMES ──
+      // Build reverse mappings: colKey -> { numericValue -> label }
+      const regimeReverseMaps = {};
+      for (const [colKey, config] of Object.entries(REGIME_COLUMNS)) {
+        const rmap = {};
+        for (const [label, m] of Object.entries(config.mapping)) {
+          // Multiple labels can map to same value, store as array
+          if (!rmap[m.value]) rmap[m.value] = [];
+          rmap[m.value].push(label);
+        }
+        regimeReverseMaps[colKey] = rmap;
+      }
+
+      // Tooltip container
+      const tooltip = document.createElement('div');
+      tooltip.style.cssText = 'position:absolute;z-index:100;pointer-events:none;background:#1d232a;border:1px solid #2a323c;border-radius:6px;padding:8px 12px;font-size:12px;color:#a6adba;display:none;white-space:nowrap;';
+      container.style.position = 'relative';
+      container.appendChild(tooltip);
+
+      // Build per-row lookup for regime labels (time -> colKey -> rawLabel)
+      const regimeLabelByTime = {};
+      for (const r of rows) {
+        const t = dateToTimestamp(r.date);
+        regimeLabelByTime[t] = {};
+        for (const colKey of Object.keys(REGIME_COLUMNS)) {
+          regimeLabelByTime[t][colKey] = r[colKey] || '';
+        }
+      }
+
+      chart.subscribeCrosshairMove((param) => {
+        if (!param.time || !param.point) {
+          tooltip.style.display = 'none';
+          return;
+        }
+
+        const timeLabels = regimeLabelByTime[param.time];
+        if (!timeLabels) {
+          tooltip.style.display = 'none';
+          return;
+        }
+
+        // Check active regime series
+        const lines = [];
+        for (const [colKey, config] of Object.entries(REGIME_COLUMNS)) {
+          if (!regimeSeriesMap[colKey]) continue;
+          const label = snapshotMode ? null : timeLabels[colKey];
+          const seriesData = param.seriesData.get(regimeSeriesMap[colKey]);
+          if (seriesData) {
+            // For snapshot mode, reverse-map from value
+            let displayLabel = label;
+            if (snapshotMode || !displayLabel) {
+              const rmap = regimeReverseMaps[colKey];
+              const candidates = rmap[seriesData.value];
+              displayLabel = candidates ? candidates[0] : String(seriesData.value);
+            }
+            const color = seriesData.color || '#a6adba';
+            lines.push(`<span style="color:${color}">●</span> ${config.displayName}: <b>${displayLabel}</b>`);
+          }
+        }
+
+        if (lines.length === 0) {
+          tooltip.style.display = 'none';
+          return;
+        }
+
+        tooltip.innerHTML = lines.join('<br>');
+        tooltip.style.display = 'block';
+        tooltip.style.left = (param.point.x + 16) + 'px';
+        tooltip.style.top = (param.point.y + 16) + 'px';
+      });
 
       chart.timeScale().fitContent();
 
