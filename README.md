@@ -1,12 +1,11 @@
 
 ```bash
 --- Report ---
-  Snapshots: 1863
-  Total rows: 2296300
-  Date: 2026-01-23 01:00:00 - 2026-05-11 19:00:00
-  Columns: ['date', 'instrument_name', 'expiry_name', 'expiry_date', 'strike', 'type', 'volume', 'open_interest', 'rho', 'theta', 'vega', 'gamma', 'delta', 'bid_iv', 'ask_iv', 'mark_iv']
-  CSV: full_data.csv (325.5 MB)
-  PARQUET: full_data.parquet (43.1 MB)
+  Snapshots: 2194
+  Total rows: 3185904
+  Date: 2026-01-23 01:00:00 - 2026-06-20 14:00:00
+  CSV: full_data.csv (451.1 MB)
+  PARQUET: full_data.parquet (51.9 MB)
   Samples: full_data_sample.csv, sample.csv
 ```
 
